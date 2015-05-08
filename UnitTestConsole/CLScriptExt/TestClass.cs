@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using UnitTest;
+using UnitTestConsole;
 
 
     public class TestClass
@@ -71,7 +72,7 @@ using UnitTest;
                 {
                     if (ThreadContext.activeContext == null)
                     {
-                        ThreadContext c = new ThreadContext(Form1.g_this.env);
+                        ThreadContext c = new ThreadContext(Program.env);
                     }
                     action();
                 }));

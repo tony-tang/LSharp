@@ -253,7 +253,7 @@ namespace CLRSharp
             {
                 int step = 2;
                 char[] arr = array as char[];
-                for (int i = 0; i < bytes.Length / step; i++)
+                for (int i = 0; i < Math.Min(bytes.Length / step, arr.Length); i++)
                 {
                     arr[i] = (char)BitConverter.ToUInt16(bytes, i * step);
                 }
@@ -502,7 +502,7 @@ namespace CLRSharp
                 else ev = (int)obj;
                 obj = Enum.ToObject(type.TypeForSystem, ev);
             }
-            else 
+            else
             {
                 if (box != null)
                 {
@@ -628,17 +628,48 @@ namespace CLRSharp
         //条件跳转
         public void Beq(int addr_index)
         {
-            VBox n2 = stackCalc.Pop() as VBox;
-            VBox n1 = stackCalc.Pop() as VBox;
-
-            if (n1.logic_eq(n2))
+            object o2 = stackCalc.Pop();
+            object o1 = stackCalc.Pop();
+            if (o1 is VBox && o2 is VBox)
             {
-                _codepos = addr_index;// _body.addr[pos.Offset];
+                VBox n2 = o2 as VBox;
+                VBox n1 = o1 as VBox;
+
+                if (n1.logic_eq(n2))
+                {
+                    _codepos = addr_index;// _body.addr[pos.Offset];
+                }
+                else
+                {
+                    _codepos++;
+                }
+            }
+            else if (o1 is int)
+            {
+
+                int lv = (int)o1;
+                int rv = 0;
+                if (o2 is int)
+                    rv = (int)o2;
+                else if (o2 is VBox)
+                    rv = (o2 as VBox).v32;
+                else
+                    throw new Exception("what a fuck");
+
+                if (lv == rv)
+                {
+                    _codepos = addr_index;// _body.addr[pos.Offset];
+                }
+                else
+                {
+                    _codepos++;
+                }
             }
             else
             {
-                _codepos++;
+                throw new Exception("what a fuck");
             }
+
         }
         public void Bne(int addr_index)
         {
@@ -827,17 +858,26 @@ namespace CLRSharp
             {
                 slotVar.Add(null);
             }
-            VBox box = slotVar[pos] as VBox;
-            if (box == null)
+            if (v != null && v.GetType().IsValueType)
             {
-                slotVar[pos] = v;
+                var mm = v.GetType().GetMethod("MemberwiseClone", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                slotVar[pos] = mm.Invoke(v, null);
             }
             else
             {
-                if (v is VBox)
-                    box.Set(v as VBox);
+                VBox box = slotVar[pos] as VBox;
+                if (box == null)
+                {
+
+                    slotVar[pos] = v;
+                }
                 else
-                    box.SetDirect(v);
+                {
+                    if (v is VBox)
+                        box.Set(v as VBox);
+                    else
+                        box.SetDirect(v);
+                }
             }
             _codepos++;
         }
@@ -1050,7 +1090,7 @@ namespace CLRSharp
         {
             VBox n2 = stackCalc.Pop() as VBox;
             object n1 = stackCalc.Pop();
-            if(n1 is VBox)
+            if (n1 is VBox)
             {
                 VBox n_1 = n1 as VBox;
                 n_1.Add(n2);
@@ -1349,7 +1389,7 @@ namespace CLRSharp
         }
 
         ////数组
-        public void NewArr(ThreadContext context, IMethod newForArray)
+        public void NewArr(ThreadContext context, Type type)
         {
             //string typename = type.FullName + "[]";
             //var _type = context.environment.GetType(typename, type.Module);
@@ -1357,7 +1397,7 @@ namespace CLRSharp
             //var m = _type.GetMethod(".ctor", tlist);
             var objv = stackCalc.Pop();
             if (objv is VBox) objv = (objv as VBox).BoxDefine();
-            var array = newForArray.Invoke(context, null, new object[] { objv });
+            var array = Array.CreateInstance(type, (int)objv);
             stackCalc.Push(array);
             _codepos++;
         }
@@ -1435,11 +1475,23 @@ namespace CLRSharp
             {
                 index = (int)indexobj;
             }
-            byte[] array = stackCalc.Pop() as byte[];
-            var box = ValueOnStack.MakeVBox(NumberType.BYTE);
-            box.v32 = array[index];
-            stackCalc.Push(box);
-            _codepos++;
+            object obj = stackCalc.Pop();
+            if (obj is byte[])
+            {
+                byte[] array = obj as byte[];
+                var box = ValueOnStack.MakeVBox(NumberType.BYTE);
+                box.v32 = array[index];
+                stackCalc.Push(box);
+                _codepos++;
+            }
+            else if (obj is bool[])
+            {
+                bool[] array = obj as bool[];
+                var box = ValueOnStack.MakeVBox(NumberType.BOOL);
+                box.v32 = array[index] ? 1 : 0;
+                stackCalc.Push(box);
+                _codepos++;
+            }
         }
 
         public void Ldelem_I2()
@@ -1539,10 +1591,21 @@ namespace CLRSharp
             {
                 index = (int)indexobj;
             }
-            Int64[] array = stackCalc.Pop() as Int64[];
-            var box = ValueOnStack.MakeVBox(NumberType.INT64);
-            box.v64 = array[index];
-            stackCalc.Push(box);
+            var obj = stackCalc.Pop();
+            if (obj is Int64[])
+            {
+                Int64[] array = obj as Int64[];
+                var box = ValueOnStack.MakeVBox(NumberType.INT64);
+                box.v64 = array[index];
+                stackCalc.Push(box);
+            }
+            else
+            {
+                UInt64[] array = obj as UInt64[];
+                var box = ValueOnStack.MakeVBox(NumberType.INT64);
+                box.v64 = (long)array[index];
+                stackCalc.Push(box);
+            }
             _codepos++;
         }
         public void Ldelem_I()
@@ -2347,113 +2410,249 @@ namespace CLRSharp
                 //_pos = poss[pos];
             }
         }
-        public void Ldind_I1(ThreadContext context, object obj)
+        public void Ldind_I1()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_I1:");
             //_codepos++;
         }
-        public void Ldind_U1(ThreadContext context, object obj)
+        public void Ldind_U1()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_U1:");
             //_codepos++;
         }
-        public void Ldind_I2(ThreadContext context, object obj)
+        public void Ldind_I2()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_I2:");
             //_codepos++;
         }
-        public void Ldind_U2(ThreadContext context, object obj)
+        public void Ldind_U2()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_U2:");
             //_codepos++;
         }
-        public void Ldind_I4(ThreadContext context, object obj)
+        public void Ldind_I4()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_I4:");
             //_codepos++;
         }
-        public void Ldind_U4(ThreadContext context, object obj)
+        public void Ldind_U4()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_U4:");
             //_codepos++;
         }
-        public void Ldind_I8(ThreadContext context, object obj)
+        public void Ldind_I8()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_I8:");
             //_codepos++;
         }
-        public void Ldind_I(ThreadContext context, object obj)
+        public void Ldind_I()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_I:");
             //_codepos++;
         }
-        public void Ldind_R4(ThreadContext context, object obj)
+        public void Ldind_R4()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_R4:");
             //_codepos++;
         }
-        public void Ldind_R8(ThreadContext context, object obj)
+        public void Ldind_R8()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+            object obje = stackCalc.Pop();
+            if (obje is RefObj)
+            {
+                RefObj _ref = obje as RefObj;
+                object value = _ref.Get();
+                VBox box = ValueOnStack.MakeVBox(value.GetType());
+                box.SetDirect(value);
+                stackCalc.Push(box);
+                _codepos++;
+                return;
+            }
+            throw new Exception("not impl Ldind_R8:");
             //_codepos++;
         }
-        public void Ldind_Ref(ThreadContext context, object obj)
+        public void Ldind_Ref()
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
+
+            throw new Exception("not impl Ldind_Ref:");
             //_codepos++;
         }
         public void Stind_Ref(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_I1(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_I2(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_I4(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_I8(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_R4(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void Stind_R8(ThreadContext context, object obj)
         {
-            Type t = obj.GetType();
-            throw new NotImplementedException(t.ToString());
-            //_codepos++;
+            var o1 = stackCalc.Pop();
+            var o2 = stackCalc.Pop();
+            if (o2 is RefObj)
+            {
+                (o2 as RefObj).Set(o1 is VBox ? (o1 as VBox).BoxDefine() : o1);
+            }
+
+            _codepos++;
         }
         public void And()
         {
